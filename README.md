@@ -80,4 +80,4 @@ The workflow stores personal data about other people (names, employers, notes). 
 
 ---
 
-<sub>Part of [AI Build Log](https://github.com/96jjrevorio/ai-build-log) · by [Julián Revorio](https://www.linkedin.com/in/julianrevorio/)</sub>
+<sub>Part of [AI Build Log](https://github.com/julianreves/ai-build-log) · by [Julián Revorio](https://www.linkedin.com/in/julianrevorio/)</sub>
