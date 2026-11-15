@@ -1,0 +1,200 @@
+{
+  "name": "CRM · Slice 1 · Voice → New Contact",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": { "download": true }
+      },
+      "id": "trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [-40, 300],
+      "credentials": {
+        "telegramApi": { "id": "", "name": "Telegram account" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only the owner may use this bot. Replace with your numeric Telegram user ID (from @userinfobot).\nconst OWNER_ID = 123456789;\nconst allowed = $input.all().filter(i => i.json && i.json.message && i.json.message.from && i.json.message.from.id === OWNER_ID);\nreturn allowed; // returns [] (stops) if the sender is not you; preserves the downloaded audio binary"
+      },
+      "id": "gate",
+      "name": "Security Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "isvoice",
+              "leftValue": "={{ !!$json.message.voice }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "isvoiceif",
+      "name": "Is Voice?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/transcriptions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "gpt-4o-transcribe" },
+            { "parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "data" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "transcribe",
+      "name": "Transcribe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 200],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "OpenAI (Header Auth)" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = $now.toFormat('yyyy-MM-dd');\nconst transcript = ($json.text || '').trim();\nconst system = `You are a personal CRM assistant. You receive a voice-note transcript and extract structured contact info. Today's date is ${today}.\\nReturn ONLY valid JSON with these fields: full_name (string|null), date_met (YYYY-MM-DD, infer from context or use today), how_met (string|null), company (string|null), role (string|null), what_they_do (string|null), city (string|null), birthday (YYYY-MM-DD|null), key_notes (string), follow_up_needed (boolean), follow_up_action (string|null), reminder_date (YYYY-MM-DD|null), tags (array of strings), meeting_intent (boolean), meeting_type (coffee/lunch/call/dinner/meeting|null), meeting_timeframe (string|null), meeting_purpose (string|null), is_update (boolean), confidence (high/medium/low).\\nRules: Never invent info not present in the transcript. Use null for anything not mentioned. Preserve natural language for meeting_timeframe (do not convert to a date). Tags capture industry, relationship type, topics, and location when relevant. Set confidence to low if the name is unclear or ambiguous.`;\nreturn [{ json: { transcript, body: { model: 'gpt-4o', temperature: 0.1, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: system }, { role: 'user', content: transcript } ] } } }];"
+      },
+      "id": "buildbody",
+      "name": "Build Parse Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "parsehttp",
+      "name": "Parse via OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 200],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "OpenAI (Header Auth)" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices[0].message.content;\nconst c = JSON.parse(raw);\nc.raw_transcript = $('Build Parse Body').item.json.transcript;\nreturn [{ json: c }];"
+      },
+      "id": "parsejson",
+      "name": "Parse Contact JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 200]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "PASTE_SPREADSHEET_ID", "mode": "id" },
+        "sheetName": { "__rl": true, "value": "Contacts", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Full Name": "={{ $json.full_name }}",
+            "Date First Met": "={{ $json.date_met }}",
+            "Last Seen Date": "={{ $json.date_met }}",
+            "How Met": "={{ $json.how_met }}",
+            "Company": "={{ $json.company }}",
+            "Role": "={{ $json.role }}",
+            "What They Do": "={{ $json.what_they_do }}",
+            "City": "={{ $json.city }}",
+            "Birthday": "={{ $json.birthday }}",
+            "Interaction Log": "={{ '[' + $now.toFormat('yyyy-MM-dd') + '] ' + ($json.key_notes || '') }}",
+            "Follow-up Needed": "={{ $json.follow_up_needed ? 'TRUE' : 'FALSE' }}",
+            "Follow-up Action": "={{ $json.follow_up_action }}",
+            "Reminder Date": "={{ $json.reminder_date }}",
+            "Tags": "={{ Array.isArray($json.tags) ? $json.tags.join(', ') : ($json.tags || '') }}",
+            "Confidence": "={{ $json.confidence }}",
+            "Raw Transcripts": "={{ '[' + $now.toFormat('yyyy-MM-dd') + '] ' + ($json.raw_transcript || '') }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "appendsheet",
+      "name": "Append to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1520, 200],
+      "credentials": {
+        "googleSheetsOAuth2Api": { "id": "", "name": "Google Sheets account" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ '✅ Saved *' + $('Parse Contact JSON').item.json.full_name + '*' + ($('Parse Contact JSON').item.json.company ? ' — ' + $('Parse Contact JSON').item.json.company : '') + ($('Parse Contact JSON').item.json.role ? ' (' + $('Parse Contact JSON').item.json.role + ')' : '') + ($('Parse Contact JSON').item.json.follow_up_needed ? '\\n📌 ' + ($('Parse Contact JSON').item.json.follow_up_action || 'Follow up') : '') + ($('Parse Contact JSON').item.json.confidence === 'low' ? '\\n⚠️ Low confidence — please review.' : '') }}",
+        "additionalFields": { "parse_mode": "Markdown" }
+      },
+      "id": "confirm",
+      "name": "Send Confirmation",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1740, 200],
+      "credentials": {
+        "telegramApi": { "id": "", "name": "Telegram account" }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "For now I only handle voice notes 🎙️ — send me one and I'll log the contact.",
+        "additionalFields": {}
+      },
+      "id": "askvoice",
+      "name": "Ask For Voice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [640, 420],
+      "credentials": {
+        "telegramApi": { "id": "", "name": "Telegram account" }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Security Gate", "type": "main", "index": 0 }]] },
+    "Security Gate": { "main": [[{ "node": "Is Voice?", "type": "main", "index": 0 }]] },
+    "Is Voice?": {
+      "main": [
+        [{ "node": "Transcribe", "type": "main", "index": 0 }],
+        [{ "node": "Ask For Voice", "type": "main", "index": 0 }]
+      ]
+    },
+    "Transcribe": { "main": [[{ "node": "Build Parse Body", "type": "main", "index": 0 }]] },
+    "Build Parse Body": { "main": [[{ "node": "Parse via OpenAI", "type": "main", "index": 0 }]] },
+    "Parse via OpenAI": { "main": [[{ "node": "Parse Contact JSON", "type": "main", "index": 0 }]] },
+    "Parse Contact JSON": { "main": [[{ "node": "Append to Sheets", "type": "main", "index": 0 }]] },
+    "Append to Sheets": { "main": [[{ "node": "Send Confirmation", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
